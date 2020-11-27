@@ -2,16 +2,23 @@
 import numpy as np
 import pypsa
 import logging
-
+from pypsa.linopt import get_var, define_constraints, linexpr
 
 # %%
+def extra_functionality(network, snapshots,g_1):
 
-def daily_scheduler(C,P,alpha,beta,G):
+
+
+
+def daily_scheduler(C,P,alpha,beta,G,g_max=1,g_start=None):
     # C     : CO2 emission intensity
     # P     : Electricity price 
     # alpha : weighting for CO2 emissions
     # beta  : weigthing for Electricity price 
     # G     : Full load hours to schedule in the given day
+    # g_max : Maximum power of plant (MW)
+    # g_sart: generation in first hour. Should be value between 0 and g_max
+    #
     # C and P must contain 24 values 
     # alpha+beta should sum to 1 
     # G must be between 0 and 24 
@@ -33,7 +40,7 @@ def daily_scheduler(C,P,alpha,beta,G):
     # Tjek input parameters 
     assert len(C) == 24 and len(P) == 24
     assert alpha+beta == 1
-    assert G>0 and G<24
+    assert G>0 and G<24*g_max
 
     # Make C and P correct data format 
     C = np.array(C)
@@ -48,14 +55,26 @@ def daily_scheduler(C,P,alpha,beta,G):
 
     # Add a single node 
     model.add('Bus','H2')    
+
+
+    # Calculate maximum and minimum % load for the given hour
+    # This is wehere the starting power is defined as 
+    # the p_min and p_max is set to the same value for the first hour
+    p_min = np.zeros(24)
+    p_max = np.ones(24)
+    if g_start is not None :
+        p_min[0] = g_start/g_max
+        p_max[0] = g_start/g_max
+
     # Add a generator object with all the technical constraints 
     model.add('Generator','Electrolyzer',
             bus='H2',
             committable=True,
-            p_nom=1,
+            p_nom=g_max,
             p_nom_extendable=False,
             marginal_cost=weighted_cost,
-            p_min_pu = 0.00,            # Minimum load when turned on
+            p_min_pu = p_min,            # Minimum load when turned on
+            p_max_pu = p_max,
             min_up_time = 2,            # Minimum up time in hours 
             ramp_limit_up = 0.3,        # Maximal up ramping speed pr. hour 
             ramp_limit_down = 0.3,      # Maximal down ramping speed pr. hour 
@@ -74,7 +93,7 @@ def daily_scheduler(C,P,alpha,beta,G):
                 p_set=load)
 
     # Solve model wiht gurobi optimizer
-    model.lopf(solver_name="gurobi")
+    model.lopf(solver_name="gurobi",pyomo=True)
 
     # Retrive optimal hours and generation in these hours 
     g = model.generators_t.p['Electrolyzer']
